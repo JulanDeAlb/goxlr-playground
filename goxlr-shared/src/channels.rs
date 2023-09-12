@@ -4,7 +4,7 @@ use clap::ValueEnum;
 use enum_map::Enum;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use strum::EnumIter;
+use strum::{Display, EnumIter};
 
 /// A list of channels classified as 'Inputs'
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Enum, EnumIter)]
@@ -64,6 +64,12 @@ pub enum MuteState {
 pub enum ChannelMuteState {
     Muted,
     Unmuted,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Display, Enum, EnumIter)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum DuckingInput {
+    Mic,
 }
 
 impl From<FaderSources> for InputChannels {

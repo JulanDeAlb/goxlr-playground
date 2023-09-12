@@ -1,10 +1,11 @@
 use std::path::PathBuf;
+use std::process::Output;
 
 use enum_map::{enum_map, Enum, EnumMap};
 use serde::{Deserialize, Serialize};
 
 use goxlr_shared::buttons::InactiveButtonBehaviour;
-use goxlr_shared::channels::{InputChannels, MuteState, OutputChannels};
+use goxlr_shared::channels::{InputChannels, MuteState, OutputChannels, DuckingInput};
 use goxlr_shared::colours::{Colour, FaderColour, FaderDisplayMode, TwoColour};
 use goxlr_shared::faders::{Fader, FaderSources};
 
@@ -30,6 +31,9 @@ pub struct Profile {
     /// The General 'Configuration' of the device, this holds various settings such as (hold time)
     /// and any other settings that don't really fit anywhere else.
     pub configuration: Configuration,
+
+    /// Ducking Configuration
+    pub ducking: DuckingSettings,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -176,4 +180,26 @@ pub struct SwearSettings {
 pub struct Configuration {
     pub button_hold_time: u16,
     pub change_page_with_buttons: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingSettings {
+    pub enabled: bool,
+    pub input_source: EnumMap<DuckingInput, bool>,
+    pub transition: DuckingTransition,
+    pub output_routing: EnumMap<InputChannels, EnumMap<OutputChannels, bool>>,
+    pub attack_time: u64,
+    pub release_time: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingTransition {
+    pub ducking: Vec<DuckingVolume>,
+    pub unducking: Vec<DuckingVolume>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingVolume {
+    pub route_volume: u8,
+    pub wait_time: u64,
 }

@@ -5,10 +5,7 @@ use goxlr_shared::channels::{InputChannels, MuteState, OutputChannels};
 use goxlr_shared::colours::Colour;
 use goxlr_shared::faders::FaderSources;
 
-use crate::{
-    ButtonColourSet, FaderChannel, FaderColourSet, FaderDisplay, FaderPage, FaderPages,
-    InactiveButtonBehaviour, Profile, Screen,
-};
+use crate::{ButtonColourSet, DuckingSettings, DuckingTransition, DuckingVolume, FaderChannel, FaderColourSet, FaderDisplay, FaderPage, FaderPages, InactiveButtonBehaviour, Profile, Screen};
 use crate::{Configuration, Fader};
 use crate::{MuteAction, SwearSettings};
 
@@ -224,6 +221,15 @@ impl Default for Profile {
                 inactive_behaviour: InactiveButtonBehaviour::DimActive,
             },
         };
+        
+        let ducking = DuckingSettings {
+            enabled: Default::default(),
+            input_source: Default::default(),
+            transition: Default::default(),
+            output_routing: Default::default(),
+            attack_time: 0,
+            release_time: 500,
+        };
 
         Profile {
             channels,
@@ -231,6 +237,26 @@ impl Default for Profile {
             routing,
             swear,
             configuration,
+            ducking,
+        }
+    }
+}
+
+impl Default for DuckingTransition {
+    fn default() -> Self {
+        let mut ducking: Vec<DuckingVolume> = Vec::new();
+        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
+            ducking.push(DuckingVolume { route_volume, wait_time })
+        }
+        
+        let mut unducking: Vec<DuckingVolume> = Vec::new();
+        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
+            unducking.push(DuckingVolume { route_volume, wait_time })
+        }
+        
+        Self {
+            ducking,
+            unducking,
         }
     }
 }

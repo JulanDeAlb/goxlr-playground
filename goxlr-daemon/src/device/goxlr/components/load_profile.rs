@@ -35,6 +35,8 @@ impl LoadProfile for GoXLR {
         // Go through the profile components and apply them to the GoXLR
         self.load_volumes().await?;
         self.load_current_page(false).await?;
+        
+        self.load_ducking().await?;
 
         // Finalise things setup earlier
         self.load_colours().await?;
@@ -64,6 +66,7 @@ trait LoadProfileLocal {
 
     /// And finally, apply anything that's been configured above
     async fn apply_routing(&self) -> Result<()>;
+    async fn load_ducking(&mut self) -> Result<()>;
 }
 
 #[async_trait]
@@ -144,6 +147,14 @@ impl LoadProfileLocal for GoXLR {
         for channel in InputChannels::iter() {
             self.apply_routing_for_channel(channel).await?;
         }
+        Ok(())
+    }
+
+    async fn load_ducking(&mut self) -> Result<()> {
+        debug!("Loading Ducking..");
+        
+        self.ducking.load(&self.profile.ducking);
+        
         Ok(())
     }
 }

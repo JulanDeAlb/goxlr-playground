@@ -21,6 +21,7 @@ use goxlr_usb::runners::device::DeviceMessage;
 use goxlr_usb::runners::device::{start_usb_device_runner, GoXLRUSBConfiguration};
 
 use crate::device::device_manager::{ManagerMessage, RunnerMessage, RunnerState};
+use crate::device::goxlr::components::ducker::{AudioDucker, AudioDuckerTrait};
 use crate::device::goxlr::components::interactions::Interactions;
 use crate::device::goxlr::components::load_profile::LoadProfile;
 use crate::device::goxlr::device_config::GoXLRDeviceConfiguration;
@@ -29,7 +30,7 @@ use crate::stop::Stop;
 
 pub(crate) struct GoXLR {
     pub device: Option<DeviceInfo>,
-    command_sender: Option<mpsc::Sender<CommandSender>>,
+    pub command_sender: Option<mpsc::Sender<CommandSender>>,
 
     pub profile: Profile,
 
@@ -42,6 +43,10 @@ pub(crate) struct GoXLR {
 
     // For tracking button 'held' state..
     pub button_down_states: EnumMap<Buttons, Option<ButtonState>>,
+    
+    pub ducking: AudioDucker,
+    
+    pub timer_interval: u64,
 
     config: GoXLRDeviceConfiguration,
     shutdown: Stop,
@@ -60,6 +65,10 @@ impl GoXLR {
             mute_state: Default::default(),
             fader_state: Default::default(),
             button_down_states: Default::default(),
+            
+            ducking: Default::default(),
+            
+            timer_interval: 20,
 
             config,
             shutdown,
@@ -102,7 +111,7 @@ impl GoXLR {
         let (ready_send, ready_recv) = oneshot::channel();
 
         // A ticker to handle internal data handling periodically.
-        let mut ticker = time::interval(Duration::from_millis(20));
+        let mut ticker = time::interval(Duration::from_millis(self.timer_interval));
 
         // Build the configuration for the USB Runner, with the relevant messaging queues
         let configuration = GoXLRUSBConfiguration {
@@ -195,17 +204,7 @@ impl GoXLR {
                         // Things to do every 20ms..
                         let _ = self.check_held().await;
 
-                        // // Lets grab the current db value of the Microphone..
-                        // let (msg_send, msg_receive) = oneshot::channel();
-                        //
-                        // if let Some(sender) = self.command_sender.clone() {
-                        //     let command = CommandSender::GetMicLevel(msg_send);
-                        //     let _ = sender.send(command).await;
-                        //
-                        //     if let Ok(Ok(value)) = msg_receive.await {
-                        //         debug!("{}", value);
-                        //     }
-                        // }
+                        self.handle_ducking().await;
                     }
                     _ = self.shutdown.recv() => {
                         debug!("[GoXLR]{} Shutdown Triggered!", self.config.device);
