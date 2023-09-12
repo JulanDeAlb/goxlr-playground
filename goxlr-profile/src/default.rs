@@ -193,7 +193,8 @@ impl Default for Profile {
 
         // Mic goes to Lineout, Chat Mic and Sampler..
         routing[InputChannels::Microphone][OutputChannels::LineOut] = true;
-        routing[InputChannels::Microphone][OutputChannels::ChatMic] = true;
+        routing[InputChannels::Microphone][OutputChannels::ChatMic] = false;
+        routing[InputChannels::Microphone][OutputChannels::StreamMix] = false;
         routing[InputChannels::Microphone][OutputChannels::Sampler] = true;
 
         // Samples go to Chat Mic..
@@ -237,7 +238,7 @@ impl Default for Profile {
             transition: Default::default(),
             output_routing,
             attack_time: 0,
-            release_time: 500,
+            release_time: 5000,
         };
 
         Profile {
@@ -254,12 +255,12 @@ impl Default for Profile {
 impl Default for DuckingTransition {
     fn default() -> Self {
         let mut ducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
+        for (route_volume, wait_time) in [(18, 20), (12, 20), (8, 20), (6, 0)] {
             ducking.push(DuckingVolume { route_volume, wait_time })
         }
         
         let mut unducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
+        for (route_volume, wait_time) in [(8, 200), (12, 200), (18, 200), (32, 0)] {
             unducking.push(DuckingVolume { route_volume, wait_time })
         }
         
