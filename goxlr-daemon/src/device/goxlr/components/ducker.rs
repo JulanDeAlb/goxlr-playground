@@ -280,6 +280,8 @@ fn handle_other(interval: u64, last_time: &mut u64, index: &mut usize, transitio
 fn handle_mic_calculations(db: f64) -> (String, bool) {
     // TODO Noise Gate calculations!
     
+    debug!("{}", &db);
+    
     if db >= MIC_DB_THRESHOLD {
         (DuckingInput::Mic.to_string(), true)
     } else {
