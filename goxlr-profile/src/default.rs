@@ -1,7 +1,7 @@
 use enum_map::{enum_map, EnumMap};
 use strum::IntoEnumIterator;
 
-use goxlr_shared::channels::{InputChannels, MuteState, OutputChannels};
+use goxlr_shared::channels::{DuckingInput, InputChannels, MuteState, OutputChannels};
 use goxlr_shared::colours::Colour;
 use goxlr_shared::faders::FaderSources;
 
@@ -221,14 +221,21 @@ impl Default for Profile {
                 inactive_behaviour: InactiveButtonBehaviour::DimActive,
             },
         };
-        
+
+        let mut input_source: EnumMap<DuckingInput, bool> = EnumMap::default();
+        input_source[DuckingInput::Mic] = true;
+
+        let mut output_routing: EnumMap<InputChannels, EnumMap<OutputChannels, bool>> = EnumMap::default();
+        output_routing[InputChannels::Music][OutputChannels::Headphones] = true;
+        output_routing[InputChannels::Music][OutputChannels::StreamMix] = true;
+
         let ducking = DuckingSettings {
-            enabled: Default::default(),
-            input_source: Default::default(),
+            enabled: true,
+            input_source,
             transition: Default::default(),
-            output_routing: Default::default(),
-            attack_time: 0,
-            release_time: 500,
+            output_routing,
+            attack_time: 800,
+            release_time: 800,
         };
 
         Profile {
@@ -245,12 +252,12 @@ impl Default for Profile {
 impl Default for DuckingTransition {
     fn default() -> Self {
         let mut ducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
+        for (route_volume, wait_time) in [(18, 20), (12, 20), (8, 20), (6, 0)] {
             ducking.push(DuckingVolume { route_volume, wait_time })
         }
         
         let mut unducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
+        for (route_volume, wait_time) in [(8, 200), (12, 200), (18, 200), (32, 0)] {
             unducking.push(DuckingVolume { route_volume, wait_time })
         }
         
