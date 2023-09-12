@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use enum_map::EnumMap;
 use log::debug;
 use tokio::sync::{oneshot};
-use goxlr_profile::{DuckingSettings, DuckingTransition, DuckingVolume};
+use goxlr_profile::{DuckingSettings, DuckingTransition};
 use goxlr_shared::channels::{DuckingInput, InputChannels, OutputChannels};
 use goxlr_usb::events::commands::CommandSender;
 use crate::device::goxlr::components::routing_handler::RoutingHandler;
@@ -17,13 +17,13 @@ pub(crate) struct AudioDucker {
     enabled: bool,
     input_source: EnumMap<DuckingInput, bool>,
     
+    output_routing: EnumMap<InputChannels, EnumMap<OutputChannels, bool>>,
+    
     transition: DuckingTransition,
     timing: DuckingTiming,
     temp: TempDucking,
-    
-    output_routing: EnumMap<InputChannels, EnumMap<OutputChannels, bool>>,
 
-    ducking_calculator: DuckingCalculator,
+    ducking_calc: DuckingCalculator,
 }
 
 #[derive(Default)]
@@ -48,6 +48,8 @@ impl AudioDucker {
         self.enabled = settings.enabled;
         self.input_source = settings.input_source;
         
+        self.output_routing = settings.output_routing;
+        
         self.transition = settings.transition.clone();
         self.timing = DuckingTiming {
             attack_time: settings.attack_time,
@@ -56,14 +58,10 @@ impl AudioDucker {
         
         // For easier comparing and handling.
         let mut ducking_size = self.transition.ducking.len();
-        if ducking_size != 0 {
-            ducking_size -= 1;
-        }
+        ducking_size = ducking_size.saturating_sub(1);
         
         let mut unducking_size = self.transition.unducking.len();
-        if unducking_size != 0 {
-            unducking_size -= 1;
-        }
+        unducking_size = unducking_size.saturating_sub(1);
         
         self.temp = TempDucking {
             ducking_size,
@@ -113,7 +111,7 @@ impl AudioDuckerTrait for GoXLR {
                     DuckingInput::Mic => {
                         if let Ok(db) = self.grab_mic_db().await {
                             let (name, ducking_state) = handle_mic_calculations(db);
-                            self.ducking.ducking_calculator.handle_result(&name, ducking_state);
+                            self.ducking.ducking_calc.handle_result(&name, ducking_state);
                         }
                     }
                     // In case we would add os level DuckingInputs like Chat, we could make them run
@@ -149,73 +147,42 @@ impl AudioDuckerTrait for GoXLR {
             return;
         }
         
-        let is_empty = self.ducking.ducking_calculator.is_empty;
-        let mut state = self.ducking.ducking_calculator.state;
-        let mut in_ducking = self.ducking.ducking_calculator.in_ducking;
-        let mut in_unducking = self.ducking.ducking_calculator.in_unducking;
+        let calc = &self.ducking.ducking_calc;
+
+        if calc.need_duck_time_reset() {
+            self.ducking.temp.last_duck_time = 0;
+        } else if calc.need_unduck_time_reset() {
+            self.ducking.temp.last_unduck_time = 0;
+        }
         
-        
-        if !is_empty && !state && !in_ducking {
+        if calc.need_first_duck() {
             // For the switchover to ducking
 
-            let (allowed, volume) = handle_first(
-                self.timer_interval,
-                &mut self.ducking.temp.last_duck_time,
-                &mut self.ducking.temp.last_unduck_time,
-                &mut self.ducking.timing.attack_time,
-                &mut state,
-                &mut in_ducking,
-                &mut in_unducking,
-                &mut self.ducking.temp.ducking_index,
-                &mut self.ducking.temp.unducking_index,
-                &mut self.ducking.transition.ducking,
-            );
-
+            let (allowed, volume) = handle_first(true, self);
             if allowed {
                 self.run_ducking(volume).await;
             }
-            
-        } else if !is_empty && state && in_ducking && !in_unducking && self.ducking.temp.ducking_size > 0 && self.ducking.temp.ducking_index <= self.ducking.temp.ducking_size {
+
+        } else if calc.need_other_duck(self.ducking.temp.ducking_size, self.ducking.temp.ducking_index) {
             // While proceeding ducking
             
-            let (allowed, volume) = handle_other(
-                self.timer_interval,
-                &mut self.ducking.temp.last_duck_time,
-                &mut self.ducking.temp.ducking_index,
-                &mut self.ducking.transition.ducking,
-            );
+            
 
+            let (allowed, volume) = handle_other(true, self);
             if allowed {
                 self.run_ducking(volume).await;
             }
-        } else if is_empty && state && !in_unducking {
+        } else if calc.need_first_unduck() {
             // For the switchover to unducking
             
-            let (allowed, volume) = handle_first(
-                self.timer_interval,
-                &mut self.ducking.temp.last_unduck_time,
-                &mut self.ducking.temp.last_duck_time,
-                &mut self.ducking.timing.release_time,
-                &mut state,
-                &mut in_ducking,
-                &mut in_unducking,
-                &mut self.ducking.temp.unducking_index,
-                &mut self.ducking.temp.ducking_index,
-                &mut self.ducking.transition.unducking,
-            );
-            
+            let (allowed, volume) = handle_first(false, self);
             if allowed {
                 self.run_ducking(volume).await;
             }
-        } else if is_empty && !state && in_unducking {
+        } else if calc.need_other_unduck(self.ducking.temp.unducking_size, self.ducking.temp.unducking_index) {
             // While proceeding unducking
-            let (allowed, volume) = handle_other(
-                self.timer_interval,
-                &mut self.ducking.temp.last_unduck_time,
-                &mut self.ducking.temp.unducking_index,
-                &mut self.ducking.transition.unducking,
-            );
-
+            
+            let (allowed, volume) = handle_other(false, self);
             if allowed {
                 self.run_ducking(volume).await;
             }
@@ -243,42 +210,66 @@ impl AudioDuckerTrait for GoXLR {
     }
 }
 
-fn handle_first(interval: u64, last_time: &mut u64, last_time_zero: &mut u64, time: &mut u64, state: &mut bool, in_ducking: &mut bool, in_unducking: &mut bool, index: &mut usize, index_zero: &mut usize, transition: &mut Vec<DuckingVolume>) -> (bool, u8) {
-    // First check if we waited the attack time before starting ducking.
-    if last_time < time {
-        *last_time += interval;
+fn handle_first(duck: bool, goxlr: &mut GoXLR) -> (bool, u8) {
+    // First check if we waited the attack/release time before going further.
+    if duck && goxlr.ducking.temp.last_duck_time < goxlr.ducking.timing.attack_time {
+        goxlr.ducking.temp.last_duck_time += goxlr.timer_interval;
+        return (false, 0);
+    } else if !duck && goxlr.ducking.temp.last_unduck_time < goxlr.ducking.timing.release_time {
+        goxlr.ducking.temp.last_unduck_time += goxlr.timer_interval;
         return (false, 0);
     }
+    
+    goxlr.ducking.ducking_calc.in_duck_mode = duck;
+    goxlr.ducking.ducking_calc.in_ducking = duck;
+    goxlr.ducking.ducking_calc.in_unducking = !duck;
 
-    *state = true;
-    *in_ducking = true;
-    *in_unducking = false;
-
-    let route_volume = transition[0].route_volume;
-    *index += 1;
-    *last_time_zero = 0;
-    *index_zero = 0;
+    let route_volume = if duck {
+        goxlr.ducking.temp.ducking_index += 1;
+        goxlr.ducking.temp.last_unduck_time = 0;
+        goxlr.ducking.temp.unducking_index = 0;
+        goxlr.ducking.transition.ducking[0].route_volume
+    } else {
+        goxlr.ducking.temp.unducking_index += 1;
+        goxlr.ducking.temp.last_duck_time = 0;
+        goxlr.ducking.temp.ducking_index = 0;
+        goxlr.ducking.transition.unducking[0].route_volume
+    };
 
     (true, route_volume)
 }
 
-fn handle_other(interval: u64, last_time: &mut u64, index: &mut usize, transition: &mut Vec<DuckingVolume>) -> (bool, u8) {
+fn handle_other(duck: bool, goxlr: &mut GoXLR) -> (bool, u8) {
     // Check if we waited enough in between the lowering.
-    let inner_index = index.clone();
-    if last_time < &mut transition[inner_index - 1].wait_time {
-        *last_time += interval;
+    if duck && goxlr.ducking.temp.last_duck_time < goxlr.ducking.transition.ducking[goxlr.ducking.temp.ducking_index - 1].wait_time {
+        goxlr.ducking.temp.last_duck_time += goxlr.timer_interval;
+        return (false, 0);
+    } else if !duck && goxlr.ducking.temp.last_unduck_time < goxlr.ducking.transition.unducking[goxlr.ducking.temp.unducking_index - 1].wait_time {
+        goxlr.ducking.temp.last_unduck_time += goxlr.timer_interval;
         return (false, 0);
     }
 
-    let route_volume = transition[inner_index].route_volume;
-    *index += 1;
-    *last_time = 0;
-
+    let route_volume = if duck {
+        let index = goxlr.ducking.temp.ducking_index;
+        goxlr.ducking.temp.ducking_index += 1;
+        goxlr.ducking.temp.last_duck_time = 0;
+        goxlr.ducking.temp.unducking_index = 0;
+        goxlr.ducking.transition.ducking[index].route_volume
+    } else {
+        let index = goxlr.ducking.temp.unducking_index;
+        goxlr.ducking.temp.unducking_index += 1;
+        goxlr.ducking.temp.last_unduck_time = 0;
+        goxlr.ducking.temp.ducking_index = 0;
+        goxlr.ducking.transition.unducking[index].route_volume
+    };
+    
     (true, route_volume)
 }
 
 fn handle_mic_calculations(db: f64) -> (String, bool) {
     // TODO Noise Gate calculations!
+    
+    //debug!("{}", &db);
     
     if db >= MIC_DB_THRESHOLD {
         (DuckingInput::Mic.to_string(), true)
@@ -289,7 +280,7 @@ fn handle_mic_calculations(db: f64) -> (String, bool) {
 
 #[derive(Clone, Default)]
 struct DuckingCalculator {
-    state: bool,
+    in_duck_mode: bool,
     in_ducking: bool,
     in_unducking: bool,
     
@@ -306,5 +297,45 @@ impl DuckingCalculator {
         }
 
         self.is_empty = self.set.is_empty();
+    }
+
+    fn need_duck_time_reset(&self) -> bool {
+        self.is_empty
+            && !self.in_duck_mode
+            && !self.in_ducking
+    }
+
+    fn need_first_duck(&self) -> bool {
+        !self.is_empty
+            && !self.in_duck_mode
+            && !self.in_ducking
+    }
+
+    fn need_other_duck(&self, size: usize, index: usize) -> bool {
+        self.in_duck_mode
+            && self.in_ducking
+            && !self.in_unducking
+            && size > 0
+            && index <= size
+    }
+    
+    fn need_unduck_time_reset(&self) -> bool {
+        !self.is_empty
+            && self.in_duck_mode
+            && self.in_ducking
+    }
+
+    fn need_first_unduck(&self) -> bool {
+        self.is_empty
+            && self.in_duck_mode
+            && !self.in_unducking
+    }
+
+    fn need_other_unduck(&self, size: usize, index: usize) -> bool {
+        !self.in_duck_mode
+            && !self.in_ducking
+            && self.in_unducking 
+            && size > 0
+            && index <= size
     }
 }
