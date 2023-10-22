@@ -183,19 +183,43 @@ impl AudioDuckerTrait for GoXLR {
 }
 
 trait InternalAudioDucker {
+    fn update_check_time(&mut self, duck: bool, time: u64) -> bool;
     fn handle_first(&mut self, duck: bool) -> (bool, u8);
     fn handle_other(&mut self, duck: bool) -> (bool, u8);
     fn handle_mic_calculations(self, db: f64) -> (String, bool);
 }
 
 impl InternalAudioDucker for GoXLR {
+    fn update_check_time(&mut self, duck: bool, time: u64) -> bool {
+        let last_time = if duck {
+            self.ducking.temp.last_duck_time
+        } else {
+            self.ducking.temp.last_unduck_time
+        };
+
+        if last_time < time {
+            if duck {
+                self.ducking.temp.last_duck_time += self.timer_interval;
+            } else {
+                self.ducking.temp.last_unduck_time += self.timer_interval;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
     fn handle_first(&mut self, duck: bool) -> (bool, u8) {
         // First check if we waited the attack/release time before going further.
-        if duck && self.ducking.temp.last_duck_time < self.profile.ducking.attack_time {
-            self.ducking.temp.last_duck_time += self.timer_interval;
-            return (false, 0);
-        } else if !duck && self.ducking.temp.last_unduck_time < self.profile.ducking.release_time {
-            self.ducking.temp.last_unduck_time += self.timer_interval;
+
+        let at_time = if duck {
+            self.profile.ducking.attack_time
+        } else {
+            self.profile.ducking.release_time
+        };
+
+        if !self.update_check_time(duck, at_time) {
             return (false, 0);
         }
 
@@ -220,19 +244,15 @@ impl InternalAudioDucker for GoXLR {
 
     fn handle_other(&mut self, duck: bool) -> (bool, u8) {
         // Check if we waited enough in between the lowering.
-        if duck
-            && self.ducking.temp.last_duck_time
-                < self.profile.ducking.transition.ducking[self.ducking.temp.ducking_index - 1]
-                    .wait_time
-        {
-            self.ducking.temp.last_duck_time += self.timer_interval;
-            return (false, 0);
-        } else if !duck
-            && self.ducking.temp.last_unduck_time
-                < self.profile.ducking.transition.unducking[self.ducking.temp.unducking_index - 1]
-                    .wait_time
-        {
-            self.ducking.temp.last_unduck_time += self.timer_interval;
+
+        let wait_time = if duck {
+            self.profile.ducking.transition.ducking[self.ducking.temp.ducking_index - 1].wait_time
+        } else {
+            self.profile.ducking.transition.unducking[self.ducking.temp.unducking_index - 1]
+                .wait_time
+        };
+
+        if !self.update_check_time(duck, wait_time) {
             return (false, 0);
         }
 
