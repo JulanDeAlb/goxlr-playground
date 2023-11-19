@@ -14,6 +14,7 @@ const MIC_DB_THRESHOLD: f64 = -20.;
 pub(crate) struct AudioDucker {
     temp: TempDucking,
     ducking_calc: DuckingCalculator,
+    noise_gate: SimulatedNoiseGate,
 }
 
 #[derive(Default)]
@@ -187,6 +188,14 @@ trait InternalAudioDucker {
     fn handle_first(&mut self, duck: bool) -> (bool, u8);
     fn handle_other(&mut self, duck: bool) -> (bool, u8);
     fn handle_mic_calculations(self, db: f64) -> (String, bool);
+    fn noise_gate(
+        &mut self,
+        db_input: f64,
+        threshold: f64,
+        attenuation: f64,
+        attack: f64,
+        release: f64,
+    ) -> f64;
 }
 
 impl InternalAudioDucker for GoXLR {
@@ -276,6 +285,8 @@ impl InternalAudioDucker for GoXLR {
     fn handle_mic_calculations(self, db: f64) -> (String, bool) {
         // TODO Noise Gate calculations!
 
+        // Threshold, Attenuation, Attack, Release
+
         //debug!("{}", &db);
 
         if db >= MIC_DB_THRESHOLD {
@@ -284,6 +295,39 @@ impl InternalAudioDucker for GoXLR {
             (DuckingInput::Mic.to_string(), false)
         }
     }
+
+    fn noise_gate(
+        &mut self,
+        db_input: f64,
+        threshold_db: f64,
+        attenuation_pct: f64,
+        attack_ms: f64,
+        release_ms: f64,
+    ) -> f64 {
+        let mut output_db = db_input;
+
+        if db_input < threshold_db {
+            // Signal is below the threshold
+            if self.timer_interval < attack_ms {
+                let attenuation = attenuation_pct * self.timer_interval / attack_ms;
+                output_db = last_level_db - last_level_db * attenuation / 100.0;
+            }
+        } else {
+            // Signal is above the threshold
+            if self.timer_interval < release_ms {
+                let restore_pct = 100.0 - attenuation_pct;
+                let restoration = restore_pct * self.timer_interval / release_ms;
+                output_db = last_level_db + last_level_db * restoration / 100.0;
+            }
+        }
+
+        output_db
+    }
+}
+
+struct SimulatedNoiseGate {
+    last_attack: u64,
+    last_release: u64,
 }
 
 #[derive(Clone, Default)]
