@@ -35,7 +35,10 @@ pub(crate) trait MuteHandler {
     async fn handle_unmute(&mut self, source: Source) -> Result<()>;
 
     /// Returns the Button state for a mute button..
-    fn get_mute_button_state(&mut self, source: Source) -> State;
+    fn get_mute_button_state(&self, source: Source) -> State;
+
+    /// Returns the current state of the Cough button..
+    fn get_cough_button_state(&self) -> State;
 }
 
 #[async_trait]
@@ -46,18 +49,45 @@ impl MuteHandler for GoXLR {
         let state = self.profile.channels[source].mute_state;
         match state {
             MuteState::Unmuted => {
-                // This one is pretty trivial, we can just call 'unmute', which should set the
-                // routing table, and mute state back to their defaults from the profile.
-                self.unmute(source).await?;
+                if let Some(target) = self.add_cough_mute(source, None) {
+                    // If the target list is empty, we're going to trigger a hard mute on the channel,
+                    // so we don't need to unmute first!
+
+                    if !target.is_empty() {
+                        // However, if the target list isn't empty, we're doing a transient mute,
+                        // so need to make sure the channel isn't muted.
+                        self.unmute(source).await?;
+                    }
+
+                    // Now apply the mute settings..
+                    let changes = self.mute_to_targets(source, target).await?;
+                    self.apply_mute_changes(changes).await?;
+                } else {
+                    let changes = self.unmute(source).await?;
+                    self.apply_mute_changes(changes).await?;
+                }
             }
             MuteState::Pressed | MuteState::Held => {
+                // Same applies here, we don't know the muted state of the device..
                 let action = MuteAction::from(state);
-
-                // We need the targets..
                 let targets = self.profile.channels[source].mute_actions[action].clone();
 
-                // We can assume that if this is an initial pass, the routing is currently clean.
-                self.mute_to_targets(source, targets).await?;
+                // Apply the Cough Button Settings (if needed)
+                let cough_targets = self.add_cough_mute(source, Some(targets.clone()));
+                let targets = if let Some(targets) = cough_targets {
+                    targets
+                } else {
+                    targets
+                };
+
+                // Should we unmute existing channels?
+                if !targets.is_empty() {
+                    self.unmute(source).await?;
+                }
+
+                // Then mute to targets..
+                let changes = self.mute_to_targets(source, targets).await?;
+                self.apply_mute_changes(changes).await?;
             }
         }
 
@@ -75,18 +105,50 @@ impl MuteHandler for GoXLR {
 
         // Are we simply unmuting this channel?
         if state == MuteState::Unmuted {
-            return self.handle_unmute(source).await;
+            // We need to update the lighting regardless, but also need to maintain the cough filter
+            if let Some(channels) = self.add_cough_mute(source, None) {
+                let mut changes = None;
+                if !channels.is_empty() {
+                    // Trigger an Unmute, just in case..
+                    changes = Some(self.unmute(source).await?);
+                }
+
+                // If we unmuted above, we need to persist the Changes going forwards
+                let change = if let Some(channel) = changes {
+                    let mut second = self.mute_to_targets(source, channels).await?;
+                    channel.routing.iter().for_each(|channel| {
+                        if !second.routing.contains(channel) {
+                            second.routing.push(*channel);
+                        }
+                    });
+                    second
+                } else {
+                    self.mute_to_targets(source, channels).await?
+                };
+
+                self.apply_mute_changes(change).await?;
+            } else {
+                let changes = self.unmute(source).await?;
+                self.apply_mute_changes(changes).await?;
+                return Ok(());
+            }
+
+            return Ok(());
         }
 
         // Otherwise, get our targets and send it
         let action = MuteAction::from(state);
         let targets = self.profile.channels[source].mute_actions[action].clone();
 
-        let changes = self.mute_to_targets(source, targets).await?;
-        self.apply_mute_changes(changes).await?;
-
-        // Update the button state and return.
-        return self.update_mute_state(source, state).await;
+        return if let Some(targets) = self.add_cough_mute(source, Some(targets.clone())) {
+            let changes = self.mute_to_targets(source, targets).await?;
+            self.apply_mute_changes(changes).await?;
+            self.update_mute_state(source, state).await
+        } else {
+            let changes = self.mute_to_targets(source, targets).await?;
+            self.apply_mute_changes(changes).await?;
+            self.update_mute_state(source, state).await
+        };
     }
 
     /// This is generally called when either a channels mute target list changes, or there's some
@@ -138,11 +200,19 @@ impl MuteHandler for GoXLR {
         return self.update_mute_state(source, MuteState::Unmuted).await;
     }
 
-    fn get_mute_button_state(&mut self, source: Source) -> State {
+    fn get_mute_button_state(&self, source: Source) -> State {
         let channel = self.profile.channels[source].clone();
 
         match channel.mute_state {
             MuteState::Unmuted => State::from(channel.display.mute_colours.inactive_behaviour),
+            MuteState::Pressed => State::Colour1,
+            MuteState::Held => State::Blinking,
+        }
+    }
+
+    fn get_cough_button_state(&self) -> State {
+        match self.profile.cough.mute_state {
+            MuteState::Unmuted => State::from(self.profile.cough.colours.inactive_behaviour),
             MuteState::Pressed => State::Colour1,
             MuteState::Held => State::Blinking,
         }
@@ -158,6 +228,7 @@ trait MuteHandlerLocal {
     async fn send_mute_state(&mut self, source: Source, state: ChannelMuteState) -> Result<()>;
     async fn apply_mute_changes(&self, changes: MuteChanges) -> Result<()>;
 
+    fn add_cough_mute(&mut self, source: Source, current: Option<Target>) -> Option<Target>;
     fn restore_routing_from_profile(&mut self, source: Source) -> Result<MuteChanges>;
 }
 
@@ -216,13 +287,6 @@ impl MuteHandlerLocal for GoXLR {
             updated_routes = self.restore_routing_from_profile(source)?.routing;
         }
 
-        /*
-           TODO: Handle the Cough Button.
-           This code will completely restore the Microphone to it's natural 'Unmuted' state,
-           once complete, we should be able to just re-call the Cough Mute action to restore any
-           state muted from there.
-        */
-
         // Don't unmute on a channel which isn't flagged as muted..
         debug!("Checking device state for {:?}", source);
         self.send_mute_state(source, Unmuted).await?;
@@ -262,6 +326,43 @@ impl MuteHandlerLocal for GoXLR {
             self.apply_routing_for_channel(channel).await?;
         }
         Ok(())
+    }
+
+    fn add_cough_mute(&mut self, source: Source, current: Option<Target>) -> Option<Target> {
+        let cough_source = self.profile.cough.channel_assignment;
+        let cough_state = self.profile.cough.mute_state;
+
+        if cough_source != source || cough_state == MuteState::Unmuted {
+            // We're not attached to this source, nor are we muted, nothing to do here.
+            return None;
+        }
+
+        // Ok, we need to adjust our target list to correctly match.
+        let cough_action = MuteAction::from(cough_state);
+        let cough_targets = self.profile.cough.mute_actions[cough_action].clone();
+
+        return match current.clone() {
+            None => {
+                // No targets passed in, all we need is the current target list
+                Some(cough_targets)
+            }
+            Some(channels) => {
+                // If either of our lists are empty, return empty (Mute to All)
+                if channels.is_empty() || cough_targets.is_empty() {
+                    return Some(vec![]);
+                }
+
+                // Build a list containing targets for both source, and cough..
+                let current = current.unwrap();
+                let mut final_targets = current.clone();
+                cough_targets.iter().for_each(|target| {
+                    if !final_targets.contains(target) {
+                        final_targets.push(*target);
+                    }
+                });
+                Some(final_targets)
+            }
+        };
     }
 
     /// This function simply updates the routing table to reset any transient mute states from

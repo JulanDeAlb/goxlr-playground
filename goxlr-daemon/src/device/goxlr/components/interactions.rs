@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use async_trait::async_trait;
+use goxlr_profile::CoughBehaviour;
 use log::debug;
 use strum::IntoEnumIterator;
 
@@ -34,6 +35,9 @@ impl Interactions for GoXLR {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         debug!("Button Down: {:?}", button);
+        let mut skip_hold = false;
+        let mut skip_release = false;
+
         match button {
             // Mute behaviours happen on button up, so we can use down to check paging here..
             Buttons::FaderA | Buttons::FaderB | Buttons::FaderC | Buttons::FaderD => {
@@ -51,6 +55,12 @@ impl Interactions for GoXLR {
                     }
                 }
             }
+            Buttons::CoughButton => {
+                if self.profile.cough.cough_behaviour == CoughBehaviour::Hold {
+                    // We should apply the cough muting, and ignore hold behaviour.
+                    skip_hold = true;
+                }
+            }
 
             Buttons::Swear => {
                 // The swear button is super easy, we just turn it's light on..
@@ -61,11 +71,10 @@ impl Interactions for GoXLR {
         }
 
         // Register this button as down.
-
         self.button_down_states[button].replace(ButtonState {
             press_time: now,
-            skip_hold: false,
-            skip_release: false,
+            skip_hold,
+            skip_release,
             hold_handled: false,
         });
 
@@ -88,6 +97,13 @@ impl Interactions for GoXLR {
                     let channel = self.get_channel_for_button(button);
                     self.handle_mute_press(channel).await?;
                 }
+            }
+            Buttons::CoughButton => {
+                // if self.profile.cough.cough_behaviour == CoughBehaviour::HOLD {
+                //     // We need to unmute the cough button
+                // } else {
+                //     // We need to do something based on the current MuteState..
+                // }
             }
             Buttons::Swear => {
                 // Button released, revert to inactive state.
@@ -117,6 +133,9 @@ impl Interactions for GoXLR {
                 // Get the source assigned to this fader..
                 let channel = self.get_channel_for_button(button);
                 self.handle_mute_hold(channel).await?;
+            }
+            Buttons::CoughButton => {
+                // We need to Trigger the 'Hold' behaviour..
             }
             _ => {
                 // Nothing to do for this button

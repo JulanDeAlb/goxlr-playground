@@ -22,6 +22,8 @@ pub struct Profile {
     /// Configuration for the Swear Button
     pub swear: SwearSettings,
 
+    pub cough: CoughSettings,
+
     /// The Routing Configuration
     ///
     /// Note, we don't use RoutingOutput here, as the HardTune setting is entirely transient thus
@@ -174,6 +176,31 @@ impl From<MuteState> for MuteAction {
 pub struct SwearSettings {
     pub volume: u8,
     pub colours: ButtonColourSet,
+}
+
+/// This is for handling the cough button and it's settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoughSettings {
+    /// The behaviour when pressing the button
+    pub cough_behaviour: CoughBehaviour,
+
+    /// The current Channel Assigned to the button (Defaults to Mic)
+    pub channel_assignment: FaderSources,
+
+    /// The current channel Mute State
+    pub mute_state: MuteState,
+
+    /// Defines what action is performed on Press and Hold
+    pub mute_actions: EnumMap<MuteAction, Vec<OutputChannels>>,
+
+    /// Defines the colours and styling of the button
+    pub colours: ButtonColourSet,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Enum, Eq, PartialEq)]
+pub enum CoughBehaviour {
+    Press,
+    Hold,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]

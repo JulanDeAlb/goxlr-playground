@@ -5,7 +5,11 @@ use goxlr_shared::channels::{InputChannels, MuteState, OutputChannels};
 use goxlr_shared::colours::Colour;
 use goxlr_shared::faders::FaderSources;
 
-use crate::{ButtonColourSet, DuckingSettings, DuckingTransition, DuckingVolume, FaderChannel, FaderColourSet, FaderDisplay, FaderPage, FaderPages, InactiveButtonBehaviour, Profile, Screen};
+use crate::{
+    ButtonColourSet, CoughBehaviour, CoughSettings, DuckingSettings, DuckingTransition,
+    DuckingVolume, FaderChannel, FaderColourSet, FaderDisplay, FaderPage, FaderPages,
+    InactiveButtonBehaviour, Profile, Screen,
+};
 use crate::{Configuration, Fader};
 use crate::{MuteAction, SwearSettings};
 
@@ -221,7 +225,7 @@ impl Default for Profile {
                 inactive_behaviour: InactiveButtonBehaviour::DimActive,
             },
         };
-        
+
         let ducking = DuckingSettings {
             enabled: Default::default(),
             input_source: Default::default(),
@@ -231,11 +235,34 @@ impl Default for Profile {
             release_time: 500,
         };
 
+        let mute_action = enum_map! {
+            MuteAction::Hold => vec![OutputChannels::Headphones],
+            MuteAction::Press => vec![OutputChannels::StreamMix],
+        };
+
+        let cough = CoughSettings {
+            cough_behaviour: CoughBehaviour::Press,
+            channel_assignment: FaderSources::System,
+            mute_state: MuteState::Held,
+            mute_actions: mute_action,
+
+            colours: ButtonColourSet {
+                active_colour: Colour {
+                    red: 0,
+                    green: 255,
+                    blue: 255,
+                },
+                inactive_colour: Default::default(),
+                inactive_behaviour: InactiveButtonBehaviour::DimActive,
+            },
+        };
+
         Profile {
             channels,
             pages,
             routing,
             swear,
+            cough,
             configuration,
             ducking,
         }
@@ -246,17 +273,20 @@ impl Default for DuckingTransition {
     fn default() -> Self {
         let mut ducking: Vec<DuckingVolume> = Vec::new();
         for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
-            ducking.push(DuckingVolume { route_volume, wait_time })
+            ducking.push(DuckingVolume {
+                route_volume,
+                wait_time,
+            })
         }
-        
+
         let mut unducking: Vec<DuckingVolume> = Vec::new();
         for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
-            unducking.push(DuckingVolume { route_volume, wait_time })
+            unducking.push(DuckingVolume {
+                route_volume,
+                wait_time,
+            })
         }
-        
-        Self {
-            ducking,
-            unducking,
-        }
+
+        Self { ducking, unducking }
     }
 }
