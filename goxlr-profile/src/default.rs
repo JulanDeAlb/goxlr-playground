@@ -272,6 +272,15 @@ impl Default for Profile {
             },
         };
 
+        let ducking = DuckingSettings {
+            enabled: Default::default(),
+            input_source: Default::default(),
+            transition: Default::default(),
+            output_routing: Default::default(),
+            attack_time: 0,
+            release_time: 500,
+        };
+
         let mute_action = enum_map! {
             MuteAction::Hold => vec![OutputChannels::Headphones],
             MuteAction::Press => vec![OutputChannels::StreamMix],
@@ -305,7 +314,30 @@ impl Default for Profile {
             swear,
             cough,
             configuration,
+            ducking,
         }
+    }
+}
+
+impl Default for DuckingTransition {
+    fn default() -> Self {
+        let mut ducking: Vec<DuckingVolume> = Vec::new();
+        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
+            ducking.push(DuckingVolume {
+                route_volume,
+                wait_time,
+            })
+        }
+
+        let mut unducking: Vec<DuckingVolume> = Vec::new();
+        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
+            unducking.push(DuckingVolume {
+                route_volume,
+                wait_time,
+            })
+        }
+
+        Self { ducking, unducking }
     }
 }
 

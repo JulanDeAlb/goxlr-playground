@@ -42,6 +42,9 @@ pub struct Profile {
 
     /// The General 'Configuration' of the device
     pub configuration: Configuration,
+
+    /// Ducking Configuration
+    pub ducking: DuckingSettings,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -293,4 +296,26 @@ pub struct Gate {
     pub attack: GateTimes,
     pub release: GateTimes,
     pub attenuation: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingSettings {
+    pub enabled: bool,
+    pub input_source: EnumMap<DuckingInput, bool>,
+    pub transition: DuckingTransition,
+    pub output_routing: EnumMap<InputChannels, EnumMap<OutputChannels, bool>>,
+    pub attack_time: u64,
+    pub release_time: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingTransition {
+    pub ducking: Vec<DuckingVolume>,
+    pub unducking: Vec<DuckingVolume>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuckingVolume {
+    pub route_volume: u8,
+    pub wait_time: u64,
 }
