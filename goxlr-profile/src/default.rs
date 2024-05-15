@@ -1,4 +1,5 @@
 use enum_map::{enum_map, EnumMap};
+use goxlr_shared::channels::ducking::DuckingInput;
 use goxlr_shared::channels::fader::FaderChannels;
 use goxlr_shared::channels::input::InputChannels;
 use goxlr_shared::channels::output::OutputChannels;
@@ -14,9 +15,10 @@ use goxlr_shared::gate::GateTimes;
 use goxlr_shared::mute::MuteState;
 
 use crate::{
-    ButtonColourSet, Channels, Compressor, CoughBehaviour, CoughSettings, EqualizerValue,
-    FaderChannel, FaderColourSet, FaderDisplay, FaderPage, FaderPages, Gate,
-    InactiveButtonBehaviour, MicProfile, Microphone, MicrophoneType, Profile, Screen,
+    ButtonColourSet, Channels, Compressor, CoughBehaviour, CoughSettings, DuckingSettings,
+    DuckingTransition, DuckingVolume, EqualizerValue, FaderChannel, FaderColourSet, FaderDisplay,
+    FaderPage, FaderPages, Gate, InactiveButtonBehaviour, MicProfile, Microphone, MicrophoneType,
+    Profile, Screen,
 };
 use crate::{Configuration, Fader};
 use crate::{MuteAction, SwearSettings};
@@ -272,7 +274,7 @@ impl Default for Profile {
             },
         };
 
-        let ducking = DuckingSettings {
+        let mut ducking = DuckingSettings {
             enabled: Default::default(),
             input_source: Default::default(),
             transition: Default::default(),
@@ -280,6 +282,11 @@ impl Default for Profile {
             attack_time: 0,
             release_time: 500,
         };
+
+        ducking.enabled = true;
+        ducking.input_source[DuckingInput::Mic] = true;
+        ducking.output_routing[InputChannels::Music][OutputChannels::Headphones] = true;
+        ducking.output_routing[InputChannels::Music][OutputChannels::StreamMix] = true;
 
         let mute_action = enum_map! {
             MuteAction::Hold => vec![OutputChannels::Headphones],
@@ -322,7 +329,7 @@ impl Default for Profile {
 impl Default for DuckingTransition {
     fn default() -> Self {
         let mut ducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
+        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
             ducking.push(DuckingVolume {
                 route_volume,
                 wait_time,
@@ -330,7 +337,7 @@ impl Default for DuckingTransition {
         }
 
         let mut unducking: Vec<DuckingVolume> = Vec::new();
-        for (route_volume, wait_time) in [(32, 20), (18, 20), (12, 20), (8, 20), (6, 0)] {
+        for (route_volume, wait_time) in [(6, 200), (8, 200), (12, 200), (18, 200), (32, 0)] {
             unducking.push(DuckingVolume {
                 route_volume,
                 wait_time,
@@ -436,7 +443,7 @@ impl Default for MicProfile {
             deess: 0,
             gate: Gate {
                 enabled: true,
-                threshold: -53,
+                threshold: -51,
                 attack: GateTimes::Time10ms,
                 release: GateTimes::Time200ms,
                 attenuation: 100,

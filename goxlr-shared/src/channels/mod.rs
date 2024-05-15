@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod ducking;
 pub mod fader;
 pub mod input;
 pub mod output;

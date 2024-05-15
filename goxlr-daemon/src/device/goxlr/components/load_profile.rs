@@ -37,8 +37,6 @@ impl LoadProfile for GoXLR {
 
         // Go through the profile components and apply them to the GoXLR
         self.load_current_page(false).await?;
-        
-        self.load_ducking().await?;
 
         // Load the Mute States..
         self.load_mute_states().await?;
@@ -80,7 +78,6 @@ trait LoadProfileLocal {
 
     /// And finally, apply anything that's been configured above
     async fn apply_routing(&self) -> Result<()>;
-    async fn load_ducking(&mut self) -> Result<()>;
 }
 
 impl LoadProfileLocal for GoXLR {
@@ -176,14 +173,6 @@ impl LoadProfileLocal for GoXLR {
         for channel in InputChannels::iter() {
             self.apply_routing_for_channel(channel).await?;
         }
-        Ok(())
-    }
-
-    async fn load_ducking(&mut self) -> Result<()> {
-        debug!("Loading Ducking..");
-        
-        self.ducking.load(&self.profile.ducking);
-        
         Ok(())
     }
 }

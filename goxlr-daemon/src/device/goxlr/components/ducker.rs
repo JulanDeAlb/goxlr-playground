@@ -2,13 +2,15 @@ use crate::device::goxlr::components::routing_handler::RoutingHandler;
 use crate::device::goxlr::device::GoXLR;
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use goxlr_shared::channels::DuckingInput;
+use goxlr_shared::channels::ducking::DuckingInput;
 use goxlr_usb::events::commands::CommandSender;
 use log::debug;
 use std::collections::HashSet;
 use tokio::sync::oneshot;
+use goxlr_shared::gate::GateTimes;
+use goxlr_shared::mute::MuteState;
 
-const MIC_DB_THRESHOLD: f64 = -20.;
+const MIC_DB_MAX: f64 = -72.2;
 
 #[derive(Default)]
 pub(crate) struct AudioDucker {
@@ -95,6 +97,7 @@ impl AudioDuckerTrait for GoXLR {
         bail!("[Ducker] Couldn't retrieve mic db value!")
     }
 
+    //noinspection t
     async fn handle_ducking_calculations(&mut self) {
         if self.profile.ducking.transition.ducking.is_empty()
             || self.profile.ducking.transition.unducking.is_empty()
@@ -128,7 +131,6 @@ impl AudioDuckerTrait for GoXLR {
             self.ducking.temp.ducking_index,
         ) {
             // While proceeding ducking
-
             let (allowed, volume) = self.handle_other(true);
             if allowed {
                 self.run_ducking(volume).await;
@@ -158,6 +160,7 @@ impl AudioDuckerTrait for GoXLR {
         }
     }
 
+    //noinspection t
     async fn run_ducking(&mut self, volume: u8) {
         for (input, input_map) in self.profile.ducking.output_routing {
             for (output, state) in input_map {
@@ -187,14 +190,14 @@ trait InternalAudioDucker {
     fn update_check_time(&mut self, duck: bool, time: u64) -> bool;
     fn handle_first(&mut self, duck: bool) -> (bool, u8);
     fn handle_other(&mut self, duck: bool) -> (bool, u8);
-    fn handle_mic_calculations(self, db: f64) -> (String, bool);
+    fn handle_mic_calculations(&mut self, db: f64) -> (String, bool);
     fn noise_gate(
         &mut self,
         db_input: f64,
-        threshold: f64,
-        attenuation: f64,
-        attack: f64,
-        release: f64,
+        threshold: i8,
+        attenuation: u8,
+        attack: u16,
+        release: u16,
     ) -> f64;
 }
 
@@ -282,14 +285,22 @@ impl InternalAudioDucker for GoXLR {
         (true, route_volume)
     }
 
-    fn handle_mic_calculations(self, db: f64) -> (String, bool) {
+    fn handle_mic_calculations(&mut self, db: f64) -> (String, bool) {
         // TODO Noise Gate calculations!
+
+        let new_db = self.noise_gate(
+            db,
+            self.mic_profile.gate.threshold + 12,
+            self.mic_profile.gate.attenuation,
+            self.mic_profile.gate.attack.to_u16(),
+            self.mic_profile.gate.release.to_u16(),
+        );
 
         // Threshold, Attenuation, Attack, Release
 
         //debug!("{}", &db);
 
-        if db >= MIC_DB_THRESHOLD {
+        if new_db >= self.mic_profile.gate.threshold as f64 {
             (DuckingInput::Mic.to_string(), true)
         } else {
             (DuckingInput::Mic.to_string(), false)
@@ -299,27 +310,54 @@ impl InternalAudioDucker for GoXLR {
     fn noise_gate(
         &mut self,
         db_input: f64,
-        threshold_db: f64,
-        attenuation_pct: f64,
-        attack_ms: f64,
-        release_ms: f64,
+        threshold_db: i8,
+        attenuation_pct: u8,
+        attack_ms: u16,
+        release_ms: u16,
     ) -> f64 {
+        if self.profile.cough.mute_state != MuteState::Unmuted {
+            return MIC_DB_MAX;
+        }
+
+        // https://en.wikipedia.org/wiki/Noise_gate
         let mut output_db = db_input;
 
-        if db_input < threshold_db {
+        if output_db < threshold_db as f64 {
             // Signal is below the threshold
-            if self.timer_interval < attack_ms {
-                let attenuation = attenuation_pct * self.timer_interval / attack_ms;
-                output_db = last_level_db - last_level_db * attenuation / 100.0;
+            self.ducking.noise_gate.last_release += self.timer_interval;
+            self.ducking.noise_gate.last_attack = 0;
+
+            output_db = self.ducking.noise_gate.last_attack_db;
+
+            if self.ducking.noise_gate.last_release > release_ms as u64 {
+                self.ducking.noise_gate.last_release = release_ms as u64;
+
+                if !self.ducking.noise_gate.was_above {
+                    self.ducking.noise_gate.was_above = true;
+                    output_db = MIC_DB_MAX;
+                }
             }
+
+            //output_db = output_db - ((MIC_DB_MAX - self.ducking.noise_gate.last_attack_db) / release_ms as f64) * self.ducking.noise_gate.last_release as f64;
         } else {
             // Signal is above the threshold
-            if self.timer_interval < release_ms {
-                let restore_pct = 100.0 - attenuation_pct;
-                let restoration = restore_pct * self.timer_interval / release_ms;
-                output_db = last_level_db + last_level_db * restoration / 100.0;
+            self.ducking.noise_gate.last_attack += self.timer_interval;
+            self.ducking.noise_gate.last_release = 0;
+            self.ducking.noise_gate.was_above = false;
+
+            if self.ducking.noise_gate.last_attack > attack_ms as u64 {
+                self.ducking.noise_gate.last_attack = attack_ms as u64;
             }
+
+            output_db = MIC_DB_MAX - ((MIC_DB_MAX - output_db) / attack_ms as f64) * self.ducking.noise_gate.last_attack as f64;
+            //output_db = 0.;
         }
+
+        if output_db < threshold_db as f64 {
+            output_db = MIC_DB_MAX
+        }
+
+        self.ducking.noise_gate.last_attack_db = output_db;
 
         output_db
     }
@@ -328,6 +366,19 @@ impl InternalAudioDucker for GoXLR {
 struct SimulatedNoiseGate {
     last_attack: u64,
     last_release: u64,
+    last_attack_db: f64,
+    was_above: bool,
+}
+
+impl Default for SimulatedNoiseGate {
+    fn default() -> Self {
+        Self {
+            last_attack: Default::default(),
+            last_release: GateTimes::Time2000ms.to_u16() as u64,
+            last_attack_db: Default::default(),
+            was_above: Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -360,7 +411,7 @@ impl DuckingCalculator {
     }
 
     fn need_other_duck(&self, size: usize, index: usize) -> bool {
-        self.in_duck_mode && self.in_ducking && !self.in_unducking && size > 0 && index <= size
+        self.in_duck_mode && self.in_ducking && !self.in_unducking && size > 0 && index < size
     }
 
     fn need_unduck_time_reset(&self) -> bool {
@@ -372,6 +423,6 @@ impl DuckingCalculator {
     }
 
     fn need_other_unduck(&self, size: usize, index: usize) -> bool {
-        !self.in_duck_mode && !self.in_ducking && self.in_unducking && size > 0 && index <= size
+        !self.in_duck_mode && !self.in_ducking && self.in_unducking && size > 0 && index < size
     }
 }
